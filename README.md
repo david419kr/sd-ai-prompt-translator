@@ -18,6 +18,7 @@ Auto-translates non-English text in the main prompt to English right before imag
 - Gemini API
 - OpenAI-compatible API endpoints (for example Ollama)
 - Codex (local auth-based mode)
+- TranslateGemma Local (Hugging Face model download on first run)
 
 ## Installation (WebUI)
 
@@ -34,6 +35,15 @@ Auto-translates non-English text in the main prompt to English right before imag
 2. Choose a provider.
 3. Fill provider settings.
 4. Apply settings and use Generate as usual.
+
+### TranslateGemma Quick Setup
+
+1. In provider, select `translategemma_local`.
+2. Open `https://huggingface.co/google/translategemma-4b-it` and accept model access.
+3. Create a Hugging Face read token.
+4. Paste token into `TranslateGemma Hugging Face token`.
+5. Choose model size (`4B` / `12B` / `27B`).
+6. On first generation, the selected model is downloaded automatically and progress is shown in the WebUI console.
 
 ## Generation UI
 
@@ -54,3 +64,4 @@ Auto-translates non-English text in the main prompt to English right before imag
 
 - If provider settings are incomplete, translation is skipped and a console guidance message is shown.
 - When both extensions are installed, this extension runs before Dynamic Prompts.
+

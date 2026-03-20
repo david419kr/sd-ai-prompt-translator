@@ -18,6 +18,7 @@
 - Gemini API
 - OpenAI 互換 API エンドポイント（例: Ollama）
 - Codex（ローカル認証ベース）
+- TranslateGemma Local（初回実行時に Hugging Face モデルを自動ダウンロード）
 
 ## インストール方法（WebUI）
 
@@ -34,6 +35,15 @@
 2. プロバイダーを選択
 3. 必要な設定値を入力
 4. 設定を適用し、通常どおり Generate を実行
+
+### TranslateGemma クイック設定
+
+1. プロバイダーで `translategemma_local` を選択
+2. `https://huggingface.co/google/translategemma-4b-it` でモデル利用許可に同意
+3. Hugging Face の read token を作成
+4. `TranslateGemma Hugging Face token` にトークンを入力
+5. モデルサイズ（`4B` / `12B` / `27B`）を選択
+6. 初回 Generate 時に選択モデルを自動ダウンロードし、進行状況は WebUI コンソールに表示されます
 
 ## 生成画面 UI
 
@@ -54,3 +64,4 @@
 
 - プロバイダー設定が不足している場合は翻訳をスキップし、コンソールに案内メッセージを表示します。
 - Dynamic Prompts と同時に導入している場合は、この拡張が先に実行されます。
+

@@ -34,6 +34,9 @@ OPT_OPENAI_BASE_URL = "aipt_openai_base_url"
 OPT_OPENAI_API_KEY = "aipt_openai_api_key"
 OPT_OPENAI_MODEL = "aipt_openai_model"
 OPT_CODEX_MODEL = "aipt_codex_model"
+OPT_TRANSLATEGEMMA_HF_TOKEN = "aipt_translategemma_hf_token"
+OPT_TRANSLATEGEMMA_MODEL_SIZE = "aipt_translategemma_model_size"
+TRANSLATEGEMMA_ACCESS_URL = "https://huggingface.co/google/translategemma-4b-it"
 
 SCRIPT_BASENAME = "ai_prompt_translator.py"
 UI_KEY_TXT = f"customscript/{SCRIPT_BASENAME}/txt2img/AI Prompt Translator/value"
@@ -58,7 +61,7 @@ def _register_settings() -> None:
             "Provider",
             gr.Dropdown,
             {
-                "choices": ["gemini", "openai_compatible", "codex"],
+                "choices": ["gemini", "openai_compatible", "codex", "translategemma_local"],
                 "interactive": True,
             },
             section=SECTION,
@@ -124,8 +127,37 @@ def _register_settings() -> None:
             section=SECTION,
         ),
     )
-
-
+    shared.opts.add_option(
+        OPT_TRANSLATEGEMMA_HF_TOKEN,
+        shared.OptionInfo(
+            "",
+            (
+                "TranslateGemma Hugging Face token "
+                f"(required; first accept model access at {TRANSLATEGEMMA_ACCESS_URL})"
+            ),
+            gr.Textbox,
+            {
+                "type": "password",
+                "max_lines": 1,
+                "interactive": True,
+                "placeholder": "hf_xxx... (read token)",
+            },
+            section=SECTION,
+        ),
+    )
+    shared.opts.add_option(
+        OPT_TRANSLATEGEMMA_MODEL_SIZE,
+        shared.OptionInfo(
+            "4B",
+            "TranslateGemma model size",
+            gr.Dropdown,
+            {
+                "choices": ["4B", "12B", "27B"],
+                "interactive": True,
+            },
+            section=SECTION,
+        ),
+    )
 on_ui_settings(_register_settings)
 
 
@@ -191,6 +223,8 @@ class Script(scripts.Script):
             openai_api_key=str(getattr(shared.opts, OPT_OPENAI_API_KEY, "")),
             openai_model=str(getattr(shared.opts, OPT_OPENAI_MODEL, "gpt-4o-mini")),
             codex_model=str(getattr(shared.opts, OPT_CODEX_MODEL, "gpt-5.4")),
+            translategemma_hf_token=str(getattr(shared.opts, OPT_TRANSLATEGEMMA_HF_TOKEN, "")),
+            translategemma_model_size=str(getattr(shared.opts, OPT_TRANSLATEGEMMA_MODEL_SIZE, "4B")),
         )
         provider_name = settings.provider
         config_issue = _provider_config_issue(settings)
@@ -337,6 +371,12 @@ class Script(scripts.Script):
                 _log_warn(
                     f"Prompt#{prompt_index}: integrity check failed at line id={line_index}, keep original prompt"
                 )
+                _log_warn(
+                    f"Prompt#{prompt_index}: source preview={_safe_log_text_preview(source_line)}"
+                )
+                _log_warn(
+                    f"Prompt#{prompt_index}: translated preview={_safe_log_text_preview(translated_line)}"
+                )
                 return prompt, False
 
             _old_line, sep = lines_with_separators[line_index]
@@ -361,6 +401,18 @@ def split_lines_with_separators(text: str) -> list[tuple[str, str]]:
         sep = parts[i + 1] if i + 1 < len(parts) else ""
         rows.append((line, sep))
     return rows
+
+
+def _safe_log_text_preview(text: str, limit: int = 220) -> str:
+    if not text:
+        return "<empty>"
+    compact = " ".join(str(text).split())
+    if len(compact) > limit:
+        compact = compact[:limit] + "..."
+    try:
+        return compact.encode("unicode_escape", "backslashreplace").decode("ascii")
+    except Exception:
+        return "<preview-unavailable>"
 
 
 def _read_startup_default(is_img2img: bool) -> bool:
@@ -446,6 +498,9 @@ def _provider_cache_namespace(settings: TranslatorSettings) -> str:
     if provider == "codex":
         model = (settings.codex_model or "").strip()
         return f"codex|model={model}"
+    if provider == "translategemma_local":
+        model_size = (settings.translategemma_model_size or "").strip().upper()
+        return f"translategemma_local|size={model_size}"
     return provider
 
 
@@ -468,6 +523,21 @@ def _provider_config_issue(settings: TranslatorSettings) -> str | None:
     if provider == "codex":
         if not (settings.codex_model or "").strip():
             return "Codex model is empty."
+        return None
+
+    if provider == "translategemma_local":
+        token = (settings.translategemma_hf_token or "").strip()
+        model_size = (settings.translategemma_model_size or "").strip().upper()
+        if not token:
+            return (
+                "TranslateGemma token is empty. "
+                "1) Open "
+                f"{TRANSLATEGEMMA_ACCESS_URL} and accept access, "
+                "2) create a Hugging Face read token, "
+                "3) paste it into Settings > Extensions > AI Prompt Translator."
+            )
+        if model_size not in {"4B", "12B", "27B"}:
+            return "TranslateGemma model size must be one of: 4B, 12B, 27B."
         return None
 
     return f"Unsupported provider: {settings.provider}"

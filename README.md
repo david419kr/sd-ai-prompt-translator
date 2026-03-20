@@ -19,6 +19,15 @@ Auto-translates non-English text in the main prompt to English right before imag
 - OpenAI-compatible API endpoints (for example Ollama)
 - Codex (local auth-based mode)
 
+## Installation (WebUI)
+
+1. Open `Extensions` tab in WebUI.
+2. Go to `Install from URL`.
+3. Paste this repository URL:
+   `https://github.com/david419kr/sd-ai-prompt-translator`
+4. Click `Install`.
+5. Restart WebUI.
+
 ## Setup
 
 1. Open `Settings > Extensions > AI Prompt Translator`.

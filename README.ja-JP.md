@@ -19,6 +19,15 @@
 - OpenAI 互換 API エンドポイント（例: Ollama）
 - Codex（ローカル認証ベース）
 
+## インストール方法（WebUI）
+
+1. WebUI の `Extensions` タブを開く
+2. `Install from URL` を選択
+3. 次のリポジトリ URL を貼り付け:
+   `https://github.com/david419kr/sd-ai-prompt-translator`
+4. `Install` をクリック
+5. WebUI を再起動
+
 ## 設定手順
 
 1. `Settings > Extensions > AI Prompt Translator` を開く

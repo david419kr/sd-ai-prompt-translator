@@ -19,6 +19,15 @@
 - OpenAI 호환 API 엔드포인트(예: Ollama)
 - Codex(로컬 인증 기반 모드)
 
+## 설치 방법 (WebUI)
+
+1. WebUI의 `Extensions` 탭으로 이동
+2. `Install from URL` 선택
+3. 아래 리포지토리 URL 붙여넣기:
+   `https://github.com/david419kr/sd-ai-prompt-translator`
+4. `Install` 클릭
+5. WebUI 재시작
+
 ## 설정 방법
 
 1. `Settings > Extensions > AI Prompt Translator`로 이동

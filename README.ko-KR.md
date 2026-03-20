@@ -33,23 +33,31 @@
 
 1. `Settings > Extensions > AI Prompt Translator`로 이동
 2. Provider 선택
-3. 해당 Provider 설정값 입력
+3. Provider/모델 상세 설정값 입력
 4. 설정 적용 후 평소처럼 Generate 실행
 
 ### TranslateGemma 빠른 설정
 
 1. Provider를 `translategemma_local`로 선택
-2. `https://huggingface.co/google/translategemma-4b-it` 페이지에서 모델 접근 권한 승인
-3. Hugging Face read token 발급
-4. `TranslateGemma Hugging Face token` 항목에 토큰 입력
-5. 모델 크기(`4B` / `12B` / `27B`) 선택
-6. 첫 Generate 시 선택 모델이 자동 다운로드되며, 진행 상태는 WebUI 콘솔에서 확인 가능
+2. Settings의 단일 드롭다운 `TranslateGemma model / quantization`에서 모드 선택
+3. 선택 가능한 항목:
+   - `4B - Q4_K_M [2.31GB] <lightest>`
+   - `4B - Q8 [3.84GB] <recommended>`
+   - `4B - Full [8.04GB]`
+   - `12B - i1-Q4_K_M [6.79GB] <recommended>`
+   - `12B - i1-Q6_K [8.99GB]`
+   - `12B - Full [22.7GB]`
+4. `Full` 사용 시에만 `TranslateGemma Hugging Face token` 입력이 필요합니다. `Full`이 아니면 비워둬도 됩니다.
+5. `Full`을 사용한다면 `https://huggingface.co/google/translategemma-4b-it`에서 접근 권한 승인 후 read token을 발급해 입력하세요.
+6. TranslateGemma 모드 변경 후 첫 실행 시 필요한 모델 파일이 자동 다운로드되며, 진행 상태는 WebUI 콘솔에서 확인할 수 있습니다.
 
 ## 생성 화면 UI
 
 - 생성 탭에 `AI Prompt Translator` 접이식 메뉴가 표시됩니다.
 - 좌측 체크박스로 해당 실행에서 ON/OFF를 제어합니다.
+- Provider/모델 상세 설정은 `Settings > Extensions > AI Prompt Translator`에서 관리합니다.
 - `Toggle startup default` 버튼으로 `txt2img`/`img2img` 기본 ON/OFF를 동시에 변경할 수 있습니다. (재시작 필요)
+- `Disable Translation Caching`으로 해당 실행에서 영구 캐시 사용을 비활성화할 수 있습니다.
 - `Clear Cached Translations` 버튼으로 저장된 번역 캐시를 비울 수 있습니다.
 
 ## 번역 캐시 (크레딧 절감)

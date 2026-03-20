@@ -33,23 +33,31 @@
 
 1. `Settings > Extensions > AI Prompt Translator` を開く
 2. プロバイダーを選択
-3. 必要な設定値を入力
+3. プロバイダー/モデルの詳細設定を入力
 4. 設定を適用し、通常どおり Generate を実行
 
 ### TranslateGemma クイック設定
 
 1. プロバイダーで `translategemma_local` を選択
-2. `https://huggingface.co/google/translategemma-4b-it` でモデル利用許可に同意
-3. Hugging Face の read token を作成
-4. `TranslateGemma Hugging Face token` にトークンを入力
-5. モデルサイズ（`4B` / `12B` / `27B`）を選択
-6. 初回 Generate 時に選択モデルを自動ダウンロードし、進行状況は WebUI コンソールに表示されます
+2. Settings の単一ドロップダウン `TranslateGemma model / quantization` でモードを選択
+3. 選択可能な項目:
+   - `4B - Q4_K_M [2.31GB] <lightest>`
+   - `4B - Q8 [3.84GB] <recommended>`
+   - `4B - Full [8.04GB]`
+   - `12B - i1-Q4_K_M [6.79GB] <recommended>`
+   - `12B - i1-Q6_K [8.99GB]`
+   - `12B - Full [22.7GB]`
+4. `Full` を使う場合のみ `TranslateGemma Hugging Face token` が必要です。`Full` 以外は空欄でも動作します。
+5. `Full` を使う場合は `https://huggingface.co/google/translategemma-4b-it` でアクセス許可に同意し、read token を発行して入力してください。
+6. TranslateGemma モード変更後の初回実行時に必要なモデルファイルを自動ダウンロードし、進行状況は WebUI コンソールに表示されます。
 
 ## 生成画面 UI
 
 - 生成タブに `AI Prompt Translator` の折りたたみメニューが表示されます。
 - 左側チェックボックスでその実行時の ON/OFF を切り替えます。
+- プロバイダー/モデルの詳細設定は `Settings > Extensions > AI Prompt Translator` で管理します。
 - `Toggle startup default` で `txt2img`/`img2img` の既定 ON/OFF を同時変更できます（再起動が必要）。
+- `Disable Translation Caching` で、その実行時の永続キャッシュ利用を無効化できます。
 - `Clear Cached Translations` で保存済み翻訳キャッシュを削除できます。
 
 ## 翻訳キャッシュ（クレジット節約）

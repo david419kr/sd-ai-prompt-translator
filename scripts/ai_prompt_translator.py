@@ -35,8 +35,25 @@ OPT_OPENAI_API_KEY = "aipt_openai_api_key"
 OPT_OPENAI_MODEL = "aipt_openai_model"
 OPT_CODEX_MODEL = "aipt_codex_model"
 OPT_TRANSLATEGEMMA_HF_TOKEN = "aipt_translategemma_hf_token"
-OPT_TRANSLATEGEMMA_MODEL_SIZE = "aipt_translategemma_model_size"
+OPT_TRANSLATEGEMMA_VARIANT = "aipt_translategemma_variant"
 TRANSLATEGEMMA_ACCESS_URL = "https://huggingface.co/google/translategemma-4b-it"
+GGUF_QUANT_CHOICES_BY_MODEL_SIZE = {
+    "4B": ["Q4_K_M", "Q8_0", "Full"],
+    "12B": ["i1-Q4_K_M", "i1-Q6_K", "Full"],
+}
+TRANSLATEGEMMA_VARIANT_OPTIONS = [
+    ("4B - Q4_K_M [2.31GB] <lightest>", "4B", "Q4_K_M"),
+    ("4B - Q8 [3.84GB] <recommended>", "4B", "Q8_0"),
+    ("4B - Full [8.04GB]", "4B", "Full"),
+    ("12B - i1-Q4_K_M [6.79GB] <recommended>", "12B", "i1-Q4_K_M"),
+    ("12B - i1-Q6_K [8.99GB]", "12B", "i1-Q6_K"),
+    ("12B - Full [22.7GB]", "12B", "Full"),
+]
+TRANSLATEGEMMA_VARIANT_MAP = {
+    label: (model_size, quantization)
+    for label, model_size, quantization in TRANSLATEGEMMA_VARIANT_OPTIONS
+}
+DEFAULT_TRANSLATEGEMMA_VARIANT = "4B - Q8 [3.84GB] <recommended>"
 
 SCRIPT_BASENAME = "ai_prompt_translator.py"
 UI_KEY_TXT = f"customscript/{SCRIPT_BASENAME}/txt2img/AI Prompt Translator/value"
@@ -53,11 +70,23 @@ ANSI_YELLOW = "\033[93m"
 ANSI_RED = "\033[91m"
 
 
+def _section_header_option(text: str):
+    info = shared.OptionHTML(
+        f"<div style='margin-top:0.8em; font-weight:700;'>{text}</div>"
+    )
+    info.section = SECTION
+    return info
+
+
 def _register_settings() -> None:
+    shared.opts.add_option(
+        "aipt_header_provider",
+        _section_header_option("Provider"),
+    )
     shared.opts.add_option(
         OPT_PROVIDER,
         shared.OptionInfo(
-            "gemini",
+            "translategemma_local",
             "Provider",
             gr.Dropdown,
             {
@@ -66,6 +95,43 @@ def _register_settings() -> None:
             },
             section=SECTION,
         ),
+    )
+    shared.opts.add_option(
+        "aipt_header_tg",
+        _section_header_option("TranslateGemma Settings"),
+    )
+    shared.opts.add_option(
+        OPT_TRANSLATEGEMMA_VARIANT,
+        shared.OptionInfo(
+            DEFAULT_TRANSLATEGEMMA_VARIANT,
+            "TranslateGemma model / quantization",
+            gr.Dropdown,
+            {"choices": [x[0] for x in TRANSLATEGEMMA_VARIANT_OPTIONS], "interactive": True},
+            section=SECTION,
+        ),
+    )
+    shared.opts.add_option(
+        OPT_TRANSLATEGEMMA_HF_TOKEN,
+        shared.OptionInfo(
+            "",
+            (
+                "TranslateGemma Hugging Face token "
+                f"(required for `Full` only; optional for non-Full modes. "
+                f"Full mode needs access at {TRANSLATEGEMMA_ACCESS_URL})"
+            ),
+            gr.Textbox,
+            {
+                "type": "password",
+                "max_lines": 1,
+                "interactive": True,
+                "placeholder": "hf_xxx... (read token)",
+            },
+            section=SECTION,
+        ),
+    )
+    shared.opts.add_option(
+        "aipt_header_gemini",
+        _section_header_option("Gemini Settings"),
     )
     shared.opts.add_option(
         OPT_GEMINI_API_KEY,
@@ -86,6 +152,10 @@ def _register_settings() -> None:
             {"max_lines": 1, "interactive": True},
             section=SECTION,
         ),
+    )
+    shared.opts.add_option(
+        "aipt_header_openai_compatible",
+        _section_header_option("OpenAI-compatible API Settings"),
     )
     shared.opts.add_option(
         OPT_OPENAI_BASE_URL,
@@ -118,43 +188,16 @@ def _register_settings() -> None:
         ),
     )
     shared.opts.add_option(
+        "aipt_header_codex",
+        _section_header_option("Codex Settings"),
+    )
+    shared.opts.add_option(
         OPT_CODEX_MODEL,
         shared.OptionInfo(
             "gpt-5.4",
             "Codex model",
             gr.Textbox,
             {"max_lines": 1, "interactive": True},
-            section=SECTION,
-        ),
-    )
-    shared.opts.add_option(
-        OPT_TRANSLATEGEMMA_HF_TOKEN,
-        shared.OptionInfo(
-            "",
-            (
-                "TranslateGemma Hugging Face token "
-                f"(required; first accept model access at {TRANSLATEGEMMA_ACCESS_URL})"
-            ),
-            gr.Textbox,
-            {
-                "type": "password",
-                "max_lines": 1,
-                "interactive": True,
-                "placeholder": "hf_xxx... (read token)",
-            },
-            section=SECTION,
-        ),
-    )
-    shared.opts.add_option(
-        OPT_TRANSLATEGEMMA_MODEL_SIZE,
-        shared.OptionInfo(
-            "4B",
-            "TranslateGemma model size",
-            gr.Dropdown,
-            {
-                "choices": ["4B", "12B", "27B"],
-                "interactive": True,
-            },
             section=SECTION,
         ),
     )
@@ -203,11 +246,20 @@ class Script(scripts.Script):
                 "Each generation may send new translation requests, output may vary slightly, "
                 "and API cost may increase."
             )
+            gr.Markdown(
+                "Provider and model-specific settings are configured in "
+                "Settings > Extensions > AI Prompt Translator."
+            )
 
         self.infotext_fields = [(enabled, "AI Prompt Translator")]
         return [enabled, disable_translation_caching]
 
-    def process(self, p, enabled: bool, disable_translation_caching: bool):
+    def process(
+        self,
+        p,
+        enabled: bool,
+        disable_translation_caching: bool,
+    ):
         if not enabled:
             return
 
@@ -215,8 +267,11 @@ class Script(scripts.Script):
         if not isinstance(all_prompts, list) or not all_prompts:
             return
 
+        runtime_model_size, runtime_quantization = _resolve_translategemma_variant(
+            str(getattr(shared.opts, OPT_TRANSLATEGEMMA_VARIANT, DEFAULT_TRANSLATEGEMMA_VARIANT))
+        )
         settings = TranslatorSettings(
-            provider=str(getattr(shared.opts, OPT_PROVIDER, "gemini")),
+            provider=str(getattr(shared.opts, OPT_PROVIDER, "translategemma_local")),
             gemini_api_key=str(getattr(shared.opts, OPT_GEMINI_API_KEY, "")),
             gemini_model=str(getattr(shared.opts, OPT_GEMINI_MODEL, "gemini-2.5-flash")),
             openai_base_url=str(getattr(shared.opts, OPT_OPENAI_BASE_URL, "")),
@@ -224,7 +279,8 @@ class Script(scripts.Script):
             openai_model=str(getattr(shared.opts, OPT_OPENAI_MODEL, "gpt-4o-mini")),
             codex_model=str(getattr(shared.opts, OPT_CODEX_MODEL, "gpt-5.4")),
             translategemma_hf_token=str(getattr(shared.opts, OPT_TRANSLATEGEMMA_HF_TOKEN, "")),
-            translategemma_model_size=str(getattr(shared.opts, OPT_TRANSLATEGEMMA_MODEL_SIZE, "4B")),
+            translategemma_model_size=runtime_model_size,
+            translategemma_quantization=runtime_quantization,
         )
         provider_name = settings.provider
         config_issue = _provider_config_issue(settings)
@@ -500,7 +556,9 @@ def _provider_cache_namespace(settings: TranslatorSettings) -> str:
         return f"codex|model={model}"
     if provider == "translategemma_local":
         model_size = (settings.translategemma_model_size or "").strip().upper()
-        return f"translategemma_local|size={model_size}"
+        quantization = (settings.translategemma_quantization or "").strip()
+        backend = "tf" if quantization.lower() in {"full", "none"} else "gguf"
+        return f"translategemma_local|size={model_size}|quant={quantization}|backend={backend}"
     return provider
 
 
@@ -527,17 +585,26 @@ def _provider_config_issue(settings: TranslatorSettings) -> str | None:
 
     if provider == "translategemma_local":
         token = (settings.translategemma_hf_token or "").strip()
-        model_size = (settings.translategemma_model_size or "").strip().upper()
-        if not token:
+        model_size = _normalize_model_size(settings.translategemma_model_size)
+        quantization = _normalize_translategemma_quantization(
+            model_size,
+            settings.translategemma_quantization,
+        )
+        if quantization == "Full" and not token:
             return (
-                "TranslateGemma token is empty. "
+                "TranslateGemma token is required only for `Full` mode and is currently empty. "
                 "1) Open "
                 f"{TRANSLATEGEMMA_ACCESS_URL} and accept access, "
                 "2) create a Hugging Face read token, "
                 "3) paste it into Settings > Extensions > AI Prompt Translator."
             )
-        if model_size not in {"4B", "12B", "27B"}:
-            return "TranslateGemma model size must be one of: 4B, 12B, 27B."
+        if model_size not in GGUF_QUANT_CHOICES_BY_MODEL_SIZE:
+            return "TranslateGemma model size must be one of: 4B, 12B."
+        if quantization not in GGUF_QUANT_CHOICES_BY_MODEL_SIZE[model_size]:
+            choices = ", ".join(GGUF_QUANT_CHOICES_BY_MODEL_SIZE[model_size])
+            return (
+                f"TranslateGemma quantization for {model_size} must be one of: {choices}."
+            )
         return None
 
     return f"Unsupported provider: {settings.provider}"
@@ -546,6 +613,77 @@ def _provider_config_issue(settings: TranslatorSettings) -> str | None:
 def _make_translation_cache_key(settings: TranslatorSettings, prompt: str) -> str:
     payload = _provider_cache_namespace(settings) + "\n" + prompt
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _resolve_translategemma_variant(value: str) -> tuple[str, str]:
+    raw = (value or "").strip()
+    mapped = TRANSLATEGEMMA_VARIANT_MAP.get(raw)
+    if mapped:
+        return mapped
+
+    # Backward compatibility for old or manually edited values.
+    # Examples: "4B|Q8_0", "4B - Q8 [3.84GB] <recommended>", "Q8_0", "Full"
+    if "|" in raw:
+        parts = [x.strip() for x in raw.split("|", 1)]
+        if len(parts) == 2:
+            model_size = _normalize_model_size(parts[0])
+            quantization = _normalize_translategemma_quantization(model_size, parts[1])
+            return model_size, quantization
+
+    match = re.match(r"^\s*(4B|12B)\s*-\s*([A-Za-z0-9_+-]+)", raw, flags=re.IGNORECASE)
+    if match:
+        model_size = _normalize_model_size(match.group(1))
+        quantization = _normalize_translategemma_quantization(model_size, match.group(2))
+        return model_size, quantization
+
+    direct = raw.upper()
+    if direct in {"4B", "12B"}:
+        model_size = _normalize_model_size(direct)
+        default_quant = "Q8_0" if model_size == "4B" else "i1-Q4_K_M"
+        return model_size, default_quant
+
+    for model_size in ("4B", "12B"):
+        quantization = _normalize_translategemma_quantization(model_size, raw)
+        if quantization in GGUF_QUANT_CHOICES_BY_MODEL_SIZE.get(model_size, []):
+            return model_size, quantization
+
+    return TRANSLATEGEMMA_VARIANT_MAP[DEFAULT_TRANSLATEGEMMA_VARIANT]
+
+
+def _normalize_model_size(value: str) -> str:
+    text = (value or "").strip().upper()
+    if text in GGUF_QUANT_CHOICES_BY_MODEL_SIZE:
+        return text
+    if text.isdigit():
+        candidate = f"{int(text)}B"
+        if candidate in GGUF_QUANT_CHOICES_BY_MODEL_SIZE:
+            return candidate
+    if text.endswith("B") and text[:-1].isdigit():
+        candidate = f"{int(text[:-1])}B"
+        if candidate in GGUF_QUANT_CHOICES_BY_MODEL_SIZE:
+            return candidate
+    return "4B"
+
+
+def _quant_choices_for_model_size(model_size: str) -> list[str]:
+    normalized = _normalize_model_size(model_size)
+    return list(GGUF_QUANT_CHOICES_BY_MODEL_SIZE.get(normalized, ["Full"]))
+
+
+def _normalize_translategemma_quantization(model_size: str, quantization: str) -> str:
+    choices = _quant_choices_for_model_size(model_size)
+    value = (quantization or "").strip()
+    if value.lower() == "none":
+        return "Full"
+    if value.upper() == "Q8":
+        value = "Q8_0"
+    if value in choices:
+        return value
+    lower_map = {x.lower(): x for x in choices}
+    mapped = lower_map.get(value.lower())
+    if mapped:
+        return mapped
+    return "Full"
 
 
 def _read_translation_cache() -> OrderedDict[str, str]:

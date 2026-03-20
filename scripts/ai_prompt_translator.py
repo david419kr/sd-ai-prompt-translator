@@ -1,0 +1,555 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import os
+import re
+import sys
+import threading
+from collections import OrderedDict
+from pathlib import Path
+
+import gradio as gr
+
+import modules.scripts as scripts
+from modules import shared
+from modules.script_callbacks import on_ui_settings
+from modules.ui_components import InputAccordion
+
+from sd_ai_prompt_translator.providers import (
+    TranslatorSettings,
+    create_provider,
+    validate_line_integrity,
+)
+
+logger = logging.getLogger(__name__)
+
+SECTION = ("ai_prompt_translator", "AI Prompt Translator")
+
+OPT_PROVIDER = "aipt_provider"
+OPT_GEMINI_API_KEY = "aipt_gemini_api_key"
+OPT_GEMINI_MODEL = "aipt_gemini_model"
+OPT_OPENAI_BASE_URL = "aipt_openai_base_url"
+OPT_OPENAI_API_KEY = "aipt_openai_api_key"
+OPT_OPENAI_MODEL = "aipt_openai_model"
+OPT_CODEX_MODEL = "aipt_codex_model"
+
+SCRIPT_BASENAME = "ai_prompt_translator.py"
+UI_KEY_TXT = f"customscript/{SCRIPT_BASENAME}/txt2img/AI Prompt Translator/value"
+UI_KEY_IMG = f"customscript/{SCRIPT_BASENAME}/img2img/AI Prompt Translator/value"
+TRANSLATION_CACHE_FILENAME = "translation_cache.json"
+TRANSLATION_CACHE_MAX_ITEMS = 100
+CLEAR_CACHE_BUTTON_LABEL = "Clear Cached Translations"
+
+_TRANSLATION_CACHE_LOCK = threading.Lock()
+
+ANSI_RESET = "\033[0m"
+ANSI_BOLD = "\033[1m"
+ANSI_YELLOW = "\033[93m"
+ANSI_RED = "\033[91m"
+
+
+def _register_settings() -> None:
+    shared.opts.add_option(
+        OPT_PROVIDER,
+        shared.OptionInfo(
+            "gemini",
+            "Provider",
+            gr.Dropdown,
+            {
+                "choices": ["gemini", "openai_compatible", "codex"],
+                "interactive": True,
+            },
+            section=SECTION,
+        ),
+    )
+    shared.opts.add_option(
+        OPT_GEMINI_API_KEY,
+        shared.OptionInfo(
+            "",
+            "Gemini API key",
+            gr.Textbox,
+            {"type": "password", "max_lines": 1, "interactive": True},
+            section=SECTION,
+        ),
+    )
+    shared.opts.add_option(
+        OPT_GEMINI_MODEL,
+        shared.OptionInfo(
+            "gemini-2.5-flash",
+            "Gemini model",
+            gr.Textbox,
+            {"max_lines": 1, "interactive": True},
+            section=SECTION,
+        ),
+    )
+    shared.opts.add_option(
+        OPT_OPENAI_BASE_URL,
+        shared.OptionInfo(
+            "http://127.0.0.1:11434/v1",
+            "OpenAI-compatible base URL",
+            gr.Textbox,
+            {"max_lines": 1, "interactive": True},
+            section=SECTION,
+        ),
+    )
+    shared.opts.add_option(
+        OPT_OPENAI_API_KEY,
+        shared.OptionInfo(
+            "",
+            "OpenAI-compatible API key",
+            gr.Textbox,
+            {"type": "password", "max_lines": 1, "interactive": True},
+            section=SECTION,
+        ),
+    )
+    shared.opts.add_option(
+        OPT_OPENAI_MODEL,
+        shared.OptionInfo(
+            "gpt-4o-mini",
+            "OpenAI-compatible model",
+            gr.Textbox,
+            {"max_lines": 1, "interactive": True},
+            section=SECTION,
+        ),
+    )
+    shared.opts.add_option(
+        OPT_CODEX_MODEL,
+        shared.OptionInfo(
+            "gpt-5.4",
+            "Codex model",
+            gr.Textbox,
+            {"max_lines": 1, "interactive": True},
+            section=SECTION,
+        ),
+    )
+
+
+on_ui_settings(_register_settings)
+
+
+class Script(scripts.Script):
+    def title(self):
+        return "AI Prompt Translator"
+
+    def show(self, _is_img2img):
+        return scripts.AlwaysVisible
+
+    def ui(self, is_img2img):
+        startup_enabled = _read_startup_default(is_img2img)
+
+        with InputAccordion(startup_enabled, label=self.title()) as enabled:
+            with gr.Row():
+                toggle_default_button = gr.Button(
+                    value=_startup_button_label(startup_enabled),
+                    variant="secondary",
+                )
+                clear_cache_button = gr.Button(
+                    value=CLEAR_CACHE_BUTTON_LABEL,
+                    variant="secondary",
+                )
+
+            toggle_default_button.click(
+                fn=_toggle_startup_default_common,
+                inputs=[],
+                outputs=[toggle_default_button],
+                show_progress=False,
+            )
+            clear_cache_button.click(
+                fn=_clear_translation_cache,
+                inputs=[],
+                outputs=[],
+                show_progress=False,
+            )
+
+        self.infotext_fields = [(enabled, "AI Prompt Translator")]
+        return [enabled]
+
+    def process(self, p, enabled: bool):
+        if not enabled:
+            return
+
+        all_prompts = getattr(p, "all_prompts", None)
+        if not isinstance(all_prompts, list) or not all_prompts:
+            return
+
+        settings = TranslatorSettings(
+            provider=str(getattr(shared.opts, OPT_PROVIDER, "gemini")),
+            gemini_api_key=str(getattr(shared.opts, OPT_GEMINI_API_KEY, "")),
+            gemini_model=str(getattr(shared.opts, OPT_GEMINI_MODEL, "gemini-2.5-flash")),
+            openai_base_url=str(getattr(shared.opts, OPT_OPENAI_BASE_URL, "")),
+            openai_api_key=str(getattr(shared.opts, OPT_OPENAI_API_KEY, "")),
+            openai_model=str(getattr(shared.opts, OPT_OPENAI_MODEL, "gpt-4o-mini")),
+            codex_model=str(getattr(shared.opts, OPT_CODEX_MODEL, "gpt-5.4")),
+        )
+        provider_name = settings.provider
+        config_issue = _provider_config_issue(settings)
+        if config_issue is not None:
+            _log_warn(
+                "Skipping translation: provider settings are incomplete. "
+                "Configure API settings in Settings > Extensions > AI Prompt Translator.",
+                emphasize=True,
+            )
+            _log_warn(f"Provider config issue: {config_issue}")
+            return
+
+        try:
+            provider = create_provider(settings)
+        except Exception as exc:
+            _log_warn(f"Provider init failed ({provider_name}): {exc}")
+            return
+
+        _log_info(
+            f"Run start | provider={provider_name} | prompts={len(all_prompts)}"
+        )
+        translated_prompts: list[str] = []
+        any_changed = False
+        changed_count = 0
+
+        disk_cache = _read_translation_cache()
+        _log_info(f"Disk cache loaded | entries={len(disk_cache)}")
+        cache_writes = 0
+        disk_cache_hits = 0
+
+        prompt_cache: dict[str, str] = {}
+        run_cache_hits = 0
+        api_tasks = 0
+
+        for prompt_index, prompt in enumerate(all_prompts):
+            if not isinstance(prompt, str):
+                translated_prompts.append(prompt)
+                continue
+
+            if prompt in prompt_cache:
+                new_prompt = prompt_cache[prompt]
+                run_cache_hits += 1
+                _log_info(f"Prompt#{prompt_index}: run-cache hit (skip API)")
+            else:
+                cache_key = _make_translation_cache_key(settings, prompt)
+                cached_prompt = disk_cache.get(cache_key)
+                if isinstance(cached_prompt, str):
+                    new_prompt = cached_prompt
+                    disk_cache.move_to_end(cache_key)
+                    disk_cache_hits += 1
+                    _log_info(f"Prompt#{prompt_index}: disk-cache hit (skip API)")
+                else:
+                    api_tasks += 1
+                    new_prompt, is_cacheable = self._translate_prompt_by_lines(
+                        prompt,
+                        provider,
+                        prompt_index=prompt_index,
+                        provider_name=provider_name,
+                    )
+                    if is_cacheable:
+                        disk_cache[cache_key] = new_prompt
+                        _trim_translation_cache(disk_cache)
+                        cache_writes += 1
+                prompt_cache[prompt] = new_prompt
+            translated_prompts.append(new_prompt)
+            if new_prompt != prompt:
+                any_changed = True
+                changed_count += 1
+
+        if cache_writes > 0:
+            _write_translation_cache(disk_cache)
+            _log_info(
+                f"Disk cache updated | writes={cache_writes} | entries={len(disk_cache)}"
+            )
+
+        if not any_changed:
+            _log_info(
+                "Run done | no translation applied (all prompts unchanged) "
+                f"| unique_prompts={api_tasks} | run_cache_hits={run_cache_hits} "
+                f"| disk_cache_hits={disk_cache_hits}"
+            )
+            return
+
+        p.all_prompts = translated_prompts
+        if translated_prompts:
+            p.main_prompt = translated_prompts[0]
+            p.prompt = translated_prompts[0]
+        _log_info(
+            f"Run done | translated_prompts={changed_count} | unique_prompts={api_tasks} "
+            f"| run_cache_hits={run_cache_hits} | disk_cache_hits={disk_cache_hits}"
+        )
+
+    def _translate_prompt_by_lines(
+        self,
+        prompt: str,
+        provider,
+        prompt_index: int,
+        provider_name: str,
+    ) -> tuple[str, bool]:
+        if not contains_non_english_letters(prompt):
+            _log_info(f"Prompt#{prompt_index}: skip (ASCII-only)")
+            return prompt, False
+
+        lines_with_separators = split_lines_with_separators(prompt)
+        lines_to_translate: list[tuple[int, str]] = []
+
+        for index, (line, _sep) in enumerate(lines_with_separators):
+            if contains_non_english_letters(line):
+                lines_to_translate.append((index, line))
+
+        if not lines_to_translate:
+            _log_info(f"Prompt#{prompt_index}: skip (no translatable lines)")
+            return prompt, False
+
+        _log_info(
+            f"Prompt#{prompt_index}: translating {len(lines_to_translate)} lines via {provider_name}"
+        )
+        try:
+            translated_map = provider.translate_lines(lines_to_translate)
+        except Exception as exc:
+            _log_warn(
+                f"Prompt#{prompt_index}: request failed, keep original prompt | reason={exc}"
+            )
+            return prompt, False
+
+        for line_index, source_line in lines_to_translate:
+            translated_line = translated_map.get(line_index)
+            if not isinstance(translated_line, str):
+                _log_warn(
+                    f"Prompt#{prompt_index}: missing translated line id={line_index}, keep original prompt"
+                )
+                return prompt, False
+
+            if not validate_line_integrity(source_line, translated_line):
+                _log_warn(
+                    f"Prompt#{prompt_index}: integrity check failed at line id={line_index}, keep original prompt"
+                )
+                return prompt, False
+
+            _old_line, sep = lines_with_separators[line_index]
+            lines_with_separators[line_index] = (translated_line, sep)
+
+        _log_info(f"Prompt#{prompt_index}: translation applied")
+        return "".join(line + sep for line, sep in lines_with_separators), True
+
+
+def contains_non_english_letters(text: str) -> bool:
+    for ch in text:
+        if ch.isalpha() and not ch.isascii():
+            return True
+    return False
+
+
+def split_lines_with_separators(text: str) -> list[tuple[str, str]]:
+    parts = re.split(r"(\r\n|\r|\n)", text)
+    rows: list[tuple[str, str]] = []
+    for i in range(0, len(parts), 2):
+        line = parts[i]
+        sep = parts[i + 1] if i + 1 < len(parts) else ""
+        rows.append((line, sep))
+    return rows
+
+
+def _read_startup_default(is_img2img: bool) -> bool:
+    data = _read_ui_config()
+    key = UI_KEY_IMG if is_img2img else UI_KEY_TXT
+    if key in data:
+        return bool(data[key])
+
+    if UI_KEY_TXT in data:
+        return bool(data[UI_KEY_TXT])
+    if UI_KEY_IMG in data:
+        return bool(data[UI_KEY_IMG])
+    return False
+
+
+def _toggle_startup_default_common():
+    data = _read_ui_config()
+    current = bool(data.get(UI_KEY_TXT, False))
+    new_value = not current
+    data[UI_KEY_TXT] = new_value
+    data[UI_KEY_IMG] = new_value
+    _write_ui_config(data)
+    return gr.update(value=_startup_button_label(new_value))
+
+
+def _clear_translation_cache() -> None:
+    removed_count = _count_translation_cache_entries()
+    path = _translation_cache_path()
+    with _TRANSLATION_CACHE_LOCK:
+        try:
+            if path.exists():
+                path.unlink()
+        except Exception as exc:
+            _log_warn(f"Translation cache clear failed: {exc}")
+            return
+
+    _log_info(f"Translation cache cleared | removed_entries={removed_count}")
+
+
+def _startup_button_label(is_enabled: bool) -> str:
+    state = "On" if is_enabled else "Off"
+    return f"Toggle startup default (now: {state}, restart required)"
+
+
+def _read_ui_config() -> dict:
+    path = _ui_config_path()
+    if not path.exists():
+        return {}
+
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logger.warning("AI Prompt Translator failed to read ui-config.json: %s", exc)
+        return {}
+
+
+def _write_ui_config(data: dict) -> None:
+    path = _ui_config_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data, indent=4, ensure_ascii=False), encoding="utf-8")
+    except Exception as exc:
+        logger.warning("AI Prompt Translator failed to write ui-config.json: %s", exc)
+
+
+def _ui_config_path() -> Path:
+    return Path(shared.cmd_opts.ui_config_file)
+
+
+def _translation_cache_path() -> Path:
+    return Path(__file__).resolve().parents[1] / TRANSLATION_CACHE_FILENAME
+
+
+def _provider_cache_namespace(settings: TranslatorSettings) -> str:
+    provider = (settings.provider or "").strip().lower()
+    if provider == "gemini":
+        model = (settings.gemini_model or "").strip()
+        return f"gemini|model={model}"
+    if provider == "openai_compatible":
+        base_url = (settings.openai_base_url or "").strip().rstrip("/")
+        model = (settings.openai_model or "").strip()
+        return f"openai_compatible|base_url={base_url}|model={model}"
+    if provider == "codex":
+        model = (settings.codex_model or "").strip()
+        return f"codex|model={model}"
+    return provider
+
+
+def _provider_config_issue(settings: TranslatorSettings) -> str | None:
+    provider = (settings.provider or "").strip().lower()
+    if provider == "gemini":
+        if not (settings.gemini_api_key or "").strip():
+            return "Gemini API key is empty."
+        if not (settings.gemini_model or "").strip():
+            return "Gemini model is empty."
+        return None
+
+    if provider == "openai_compatible":
+        if not (settings.openai_base_url or "").strip():
+            return "OpenAI-compatible base URL is empty."
+        if not (settings.openai_model or "").strip():
+            return "OpenAI-compatible model is empty."
+        return None
+
+    if provider == "codex":
+        if not (settings.codex_model or "").strip():
+            return "Codex model is empty."
+        return None
+
+    return f"Unsupported provider: {settings.provider}"
+
+
+def _make_translation_cache_key(settings: TranslatorSettings, prompt: str) -> str:
+    payload = _provider_cache_namespace(settings) + "\n" + prompt
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _read_translation_cache() -> OrderedDict[str, str]:
+    path = _translation_cache_path()
+    with _TRANSLATION_CACHE_LOCK:
+        if not path.exists():
+            return OrderedDict()
+
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            _log_warn(f"Failed to read translation cache file: {exc}")
+            return OrderedDict()
+
+        cache: OrderedDict[str, str] = OrderedDict()
+        items = raw.get("items") if isinstance(raw, dict) else None
+        if not isinstance(items, list):
+            return cache
+
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            key = item.get("key")
+            value = item.get("value")
+            if isinstance(key, str) and isinstance(value, str):
+                cache[key] = value
+
+        _trim_translation_cache(cache)
+        return cache
+
+
+def _write_translation_cache(cache: OrderedDict[str, str]) -> None:
+    path = _translation_cache_path()
+    _trim_translation_cache(cache)
+    payload = {
+        "version": 1,
+        "max_items": TRANSLATION_CACHE_MAX_ITEMS,
+        "items": [{"key": k, "value": v} for k, v in cache.items()],
+    }
+
+    with _TRANSLATION_CACHE_LOCK:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = path.with_suffix(path.suffix + ".tmp")
+            tmp_path.write_text(
+                json.dumps(payload, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            tmp_path.replace(path)
+        except Exception as exc:
+            _log_warn(f"Failed to write translation cache file: {exc}")
+
+
+def _trim_translation_cache(cache: OrderedDict[str, str]) -> None:
+    while len(cache) > TRANSLATION_CACHE_MAX_ITEMS:
+        cache.popitem(last=False)
+
+
+def _count_translation_cache_entries() -> int:
+    cache = _read_translation_cache()
+    return len(cache)
+
+
+def _log_info(message: str) -> None:
+    prefixed = f"[AI Prompt Translator] {message}"
+    print(prefixed)
+    logger.info(message)
+
+
+def _log_warn(message: str, *, emphasize: bool = False) -> None:
+    prefixed = f"[AI Prompt Translator] {message}"
+    color = ANSI_RED if emphasize else ANSI_YELLOW
+    print(_colorize_console(prefixed, color, bold=emphasize))
+    logger.warning(message)
+
+
+def _colorize_console(text: str, color: str, *, bold: bool = False) -> str:
+    if not _supports_ansi_color():
+        return text
+
+    prefix = color
+    if bold:
+        prefix = ANSI_BOLD + prefix
+    return f"{prefix}{text}{ANSI_RESET}"
+
+
+def _supports_ansi_color() -> bool:
+    if os.getenv("NO_COLOR"):
+        return False
+
+    is_tty = getattr(sys.stdout, "isatty", None)
+    if callable(is_tty) and not is_tty():
+        return False
+
+    return True

@@ -162,11 +162,20 @@ class Script(scripts.Script):
                 outputs=[],
                 show_progress=False,
             )
+            disable_translation_caching = gr.Checkbox(
+                label="Disable Translation Caching",
+                value=False,
+            )
+            gr.Markdown(
+                "Warning: Disabling translation caching bypasses saved cache. "
+                "Each generation may send new translation requests, output may vary slightly, "
+                "and API cost may increase."
+            )
 
         self.infotext_fields = [(enabled, "AI Prompt Translator")]
-        return [enabled]
+        return [enabled, disable_translation_caching]
 
-    def process(self, p, enabled: bool):
+    def process(self, p, enabled: bool, disable_translation_caching: bool):
         if not enabled:
             return
 
@@ -207,13 +216,16 @@ class Script(scripts.Script):
         any_changed = False
         changed_count = 0
 
-        disk_cache = _read_translation_cache()
-        _log_info(f"Disk cache loaded | entries={len(disk_cache)}")
+        if disable_translation_caching:
+            disk_cache = OrderedDict()
+            _log_warn("Persistent translation cache is disabled for this run.")
+        else:
+            disk_cache = _read_translation_cache()
+            _log_info(f"Disk cache loaded | entries={len(disk_cache)}")
         cache_writes = 0
         disk_cache_hits = 0
 
         prompt_cache: dict[str, str] = {}
-        run_cache_hits = 0
         api_tasks = 0
 
         for prompt_index, prompt in enumerate(all_prompts):
@@ -223,35 +235,42 @@ class Script(scripts.Script):
 
             if prompt in prompt_cache:
                 new_prompt = prompt_cache[prompt]
-                run_cache_hits += 1
-                _log_info(f"Prompt#{prompt_index}: run-cache hit (skip API)")
             else:
-                cache_key = _make_translation_cache_key(settings, prompt)
-                cached_prompt = disk_cache.get(cache_key)
-                if isinstance(cached_prompt, str):
-                    new_prompt = cached_prompt
-                    disk_cache.move_to_end(cache_key)
-                    disk_cache_hits += 1
-                    _log_info(f"Prompt#{prompt_index}: disk-cache hit (skip API)")
-                else:
+                if disable_translation_caching:
                     api_tasks += 1
-                    new_prompt, is_cacheable = self._translate_prompt_by_lines(
+                    new_prompt, _is_cacheable = self._translate_prompt_by_lines(
                         prompt,
                         provider,
                         prompt_index=prompt_index,
                         provider_name=provider_name,
                     )
-                    if is_cacheable:
-                        disk_cache[cache_key] = new_prompt
-                        _trim_translation_cache(disk_cache)
-                        cache_writes += 1
+                else:
+                    cache_key = _make_translation_cache_key(settings, prompt)
+                    cached_prompt = disk_cache.get(cache_key)
+                    if isinstance(cached_prompt, str):
+                        new_prompt = cached_prompt
+                        disk_cache.move_to_end(cache_key)
+                        disk_cache_hits += 1
+                        _log_info(f"Prompt#{prompt_index}: disk-cache hit (skip API)")
+                    else:
+                        api_tasks += 1
+                        new_prompt, is_cacheable = self._translate_prompt_by_lines(
+                            prompt,
+                            provider,
+                            prompt_index=prompt_index,
+                            provider_name=provider_name,
+                        )
+                        if is_cacheable:
+                            disk_cache[cache_key] = new_prompt
+                            _trim_translation_cache(disk_cache)
+                            cache_writes += 1
                 prompt_cache[prompt] = new_prompt
             translated_prompts.append(new_prompt)
             if new_prompt != prompt:
                 any_changed = True
                 changed_count += 1
 
-        if cache_writes > 0:
+        if (not disable_translation_caching) and cache_writes > 0:
             _write_translation_cache(disk_cache)
             _log_info(
                 f"Disk cache updated | writes={cache_writes} | entries={len(disk_cache)}"
@@ -260,8 +279,7 @@ class Script(scripts.Script):
         if not any_changed:
             _log_info(
                 "Run done | no translation applied (all prompts unchanged) "
-                f"| unique_prompts={api_tasks} | run_cache_hits={run_cache_hits} "
-                f"| disk_cache_hits={disk_cache_hits}"
+                f"| unique_prompts={api_tasks} | disk_cache_hits={disk_cache_hits}"
             )
             return
 
@@ -271,7 +289,7 @@ class Script(scripts.Script):
             p.prompt = translated_prompts[0]
         _log_info(
             f"Run done | translated_prompts={changed_count} | unique_prompts={api_tasks} "
-            f"| run_cache_hits={run_cache_hits} | disk_cache_hits={disk_cache_hits}"
+            f"| disk_cache_hits={disk_cache_hits}"
         )
 
     def _translate_prompt_by_lines(

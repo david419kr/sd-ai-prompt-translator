@@ -47,6 +47,7 @@ Auto-translates non-English text in the main prompt to English right before imag
 - Saved in a JSON cache file.
 - Stores up to 100 entries.
 - If the same prompt is seen again, cached translation is reused without a new API request.
+- Enabled by default. You can disable persistent cache with `Disable Translation Caching`.
 - Use `Clear Cached Translations` to clear the cache anytime.
 
 ## Notes

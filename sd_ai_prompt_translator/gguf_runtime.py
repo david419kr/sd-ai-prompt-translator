@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import platform
 import re
 import subprocess
 import sys
@@ -9,14 +10,13 @@ from typing import Any
 
 import httpx
 
-DOUGEE_RELEASES_API = (
-    "https://api.github.com/repos/dougeeai/llama-cpp-python-wheels/releases?per_page=100"
+CUSTOM_RELEASES_API = (
+    "https://api.github.com/repos/david419kr/sd-ai-prompt-translator/releases?per_page=50"
 )
 REQUEST_TIMEOUT_SECONDS = 30.0
 
-_WHEEL_NAME_PATTERN = re.compile(
-    r"^llama_cpp_python-[^+]+\+cuda(?P<cuda>[0-9.]+)\.sm(?P<sm>[0-9]+)\.[^-]+-"
-    r"(?P<py>cp\d+)-cp\d+-win_amd64\.whl$"
+_CUSTOM_WHEEL_PATTERN = re.compile(
+    r"^llama_cpp_python-[^-]+-(?P<py>cp\d+)-cp\d+-win_amd64\.whl$"
 )
 
 
@@ -31,43 +31,52 @@ def ensure_llama_cpp_available() -> tuple[bool, str]:
     if os.name != "nt":
         return (
             False,
-            "llama_cpp is not installed. Auto-install is supported only on Windows. "
+            "llama_cpp is not installed. Auto-install fallback is supported only on Windows. "
             "Please install llama-cpp-python manually.",
         )
 
     py_tag = f"cp{sys.version_info.major}{sys.version_info.minor}"
     cuda_version, sm = _detect_cuda_and_sm()
-    if not cuda_version or not sm:
+    code, output = _pip_install_package("llama-cpp-python")
+    if code == 0:
+        try:
+            import llama_cpp  # type: ignore # noqa: F401
+
+            return True, "llama_cpp installed successfully from official source."
+        except Exception as exc:
+            output = f"{output}\nimport_error={exc}"
+
+    if not _is_custom_fallback_target(py_tag=py_tag, cuda_version=cuda_version, sm=sm):
         return (
             False,
-            "llama_cpp is not installed and CUDA runtime info is unavailable. "
-            "Auto-install skipped; please install llama-cpp-python manually.",
+            "llama_cpp official install failed and custom wheel fallback is disabled for this environment. "
+            f"py={py_tag}, cuda={cuda_version}, sm={sm}, arch={platform.machine()}, pip_tail={output}",
         )
 
-    wheel_url = _find_matching_dougee_wheel(py_tag=py_tag, cuda_version=cuda_version, sm=sm)
+    wheel_url = _find_matching_custom_wheel(py_tag=py_tag)
     if not wheel_url:
         return (
             False,
-            "No exact llama-cpp-python wheel match found in dougeeai releases for "
-            f"py={py_tag}, cuda={cuda_version}, sm={sm}, platform=win_amd64.",
+            "llama_cpp official install failed and no matching custom wheel was found. "
+            f"py={py_tag}, arch={platform.machine()}, pip_tail={output}",
         )
 
-    code, output = _pip_install(wheel_url)
-    if code != 0:
+    code2, output2 = _pip_install_url(wheel_url)
+    if code2 != 0:
         return (
             False,
-            "Failed to auto-install llama-cpp-python wheel from dougeeai. "
-            f"pip exit={code}. tail={output}",
+            "llama_cpp official install failed and custom wheel install also failed. "
+            f"pip exit={code2}. tail={output2}",
         )
 
     try:
         import llama_cpp  # type: ignore # noqa: F401
 
-        return True, "llama_cpp auto-installed successfully from dougeeai wheel."
+        return True, "llama_cpp installed successfully from custom GitHub wheel fallback."
     except Exception as exc:
         return (
             False,
-            "llama_cpp install command succeeded but import still failed: "
+            "llama_cpp custom fallback install succeeded but import still failed: "
             f"{exc}",
         )
 
@@ -130,10 +139,10 @@ def _normalize_cuda_version(value: Any) -> str | None:
     return f"{major}.{minor}"
 
 
-def _find_matching_dougee_wheel(py_tag: str, cuda_version: str, sm: str) -> str | None:
+def _find_matching_custom_wheel(py_tag: str) -> str | None:
     with httpx.Client(timeout=REQUEST_TIMEOUT_SECONDS) as client:
         response = client.get(
-            DOUGEE_RELEASES_API,
+            CUSTOM_RELEASES_API,
             headers={"Accept": "application/vnd.github+json"},
         )
 
@@ -152,14 +161,10 @@ def _find_matching_dougee_wheel(py_tag: str, cuda_version: str, sm: str) -> str 
             name = asset.get("name")
             if not isinstance(name, str):
                 continue
-            matched = _WHEEL_NAME_PATTERN.match(name)
+            matched = _CUSTOM_WHEEL_PATTERN.match(name)
             if not matched:
                 continue
             if matched.group("py") != py_tag:
-                continue
-            if matched.group("cuda") != cuda_version:
-                continue
-            if matched.group("sm") != sm:
                 continue
             url = asset.get("browser_download_url")
             if isinstance(url, str) and url:
@@ -167,7 +172,29 @@ def _find_matching_dougee_wheel(py_tag: str, cuda_version: str, sm: str) -> str 
     return None
 
 
-def _pip_install(wheel_url: str) -> tuple[int, str]:
+def _pip_install_package(package_name: str) -> tuple[int, str]:
+    command = [
+        sys.executable,
+        "-m",
+        "pip",
+        "install",
+        "--upgrade",
+        "--only-binary=:all:",
+        package_name,
+    ]
+    result = subprocess.run(
+        command,
+        check=False,
+        capture_output=True,
+        text=True,
+        errors="replace",
+    )
+    combined = ((result.stdout or "") + "\n" + (result.stderr or "")).strip()
+    tail = "\n".join(combined.splitlines()[-20:]) if combined else "<no output>"
+    return int(result.returncode), tail
+
+
+def _pip_install_url(wheel_url: str) -> tuple[int, str]:
     command = [sys.executable, "-m", "pip", "install", "--upgrade", wheel_url]
     result = subprocess.run(
         command,
@@ -179,3 +206,22 @@ def _pip_install(wheel_url: str) -> tuple[int, str]:
     combined = ((result.stdout or "") + "\n" + (result.stderr or "")).strip()
     tail = "\n".join(combined.splitlines()[-20:]) if combined else "<no output>"
     return int(result.returncode), tail
+
+
+def _is_custom_fallback_target(py_tag: str, cuda_version: str | None, sm: str | None) -> bool:
+    if os.name != "nt":
+        return False
+    if py_tag != "cp313":
+        return False
+    if not _is_x64_windows():
+        return False
+    if not cuda_version or not sm:
+        return False
+    return True
+
+
+def _is_x64_windows() -> bool:
+    machine = (platform.machine() or "").lower()
+    if machine in {"amd64", "x86_64"}:
+        return True
+    return sys.maxsize > (2**32)

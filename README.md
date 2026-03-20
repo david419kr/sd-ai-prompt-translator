@@ -33,23 +33,30 @@ Auto-translates non-English text in the main prompt to English right before imag
 
 1. Open `Settings > Extensions > AI Prompt Translator`.
 2. Choose a provider.
-3. Fill provider settings.
+3. Fill provider/model settings.
 4. Apply settings and use Generate as usual.
 
 ### TranslateGemma Quick Setup
 
-1. In provider, select `translategemma_local`.
-2. Open `https://huggingface.co/google/translategemma-4b-it` and accept model access.
-3. Create a Hugging Face read token.
-4. Paste token into `TranslateGemma Hugging Face token`.
-5. Choose model size (`4B` / `12B` / `27B`).
-6. On first generation, the selected model is downloaded automatically and progress is shown in the WebUI console.
+1. Set provider to `translategemma_local`.
+2. Choose `TranslateGemma model / quantization` in Settings (single dropdown):
+   - `4B - Q4_K_M [2.31GB] <lightest>`
+   - `4B - Q8 [3.84GB] <recommended>`
+   - `4B - Full [8.04GB]`
+   - `12B - i1-Q4_K_M [6.79GB] <recommended>`
+   - `12B - i1-Q6_K [8.99GB]`
+   - `12B - Full [22.7GB]`
+3. `Full` requires a Hugging Face token in `TranslateGemma Hugging Face token`. Non-`Full` modes can run without token.
+4. If you use `Full`, open `https://huggingface.co/google/translategemma-4b-it`, accept access, then create and paste a Hugging Face read token.
+5. After changing TranslateGemma model mode, required model files are downloaded automatically on first run (progress is shown in WebUI console).
 
 ## Generation UI
 
 - `AI Prompt Translator` foldable menu is visible in generation tabs.
 - Left checkbox enables/disables translator for that run.
+- Provider/model settings are managed in `Settings > Extensions > AI Prompt Translator`.
 - `Toggle startup default` button sets default ON/OFF for both `txt2img` and `img2img` (restart required).
+- `Disable Translation Caching` lets you bypass persistent cache for that run.
 - `Clear Cached Translations` button clears saved translations.
 
 ## Translation Cache (Credit Saving)

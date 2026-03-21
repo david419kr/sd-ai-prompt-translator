@@ -827,6 +827,7 @@ class TranslateGemmaTranslator(BaseTranslatorProvider):
             repo_id=repo_id,
             filename=filename,
             hf_token=hf_token,
+            quantization=quantization,
         )
 
         if model_size == "4B":
@@ -1009,12 +1010,15 @@ class TranslateGemmaTranslator(BaseTranslatorProvider):
         repo_id: str,
         filename: str,
         hf_token: str | None,
+        quantization: str,
     ) -> Any:
         ok, message = ensure_llama_cpp_available()
         if message:
             _log_info(f"TranslateGemma GGUF llama_cpp status | {message}")
         if not ok:
-            raise TranslationProviderError(message)
+            raise TranslationProviderError(
+                self._append_full_mode_hint(message, quantization)
+            )
 
         try:
             import torch  # type: ignore
@@ -1056,7 +1060,10 @@ class TranslateGemmaTranslator(BaseTranslatorProvider):
             from llama_cpp import Llama  # type: ignore
         except Exception as exc:
             raise TranslationProviderError(
-                "llama_cpp import failed after installation."
+                self._append_full_mode_hint(
+                    "llama_cpp import failed after startup install.",
+                    quantization,
+                )
             ) from exc
 
         _log_info(
@@ -1070,7 +1077,12 @@ class TranslateGemmaTranslator(BaseTranslatorProvider):
                 verbose=False,
             )
         except Exception as exc:
-            raise TranslationProviderError(f"TranslateGemma GGUF model load failed: {exc}") from exc
+            raise TranslationProviderError(
+                self._append_full_mode_hint(
+                    f"TranslateGemma GGUF model load failed: {exc}",
+                    quantization,
+                )
+            ) from exc
 
         with _TRANSLATEGEMMA_GGUF_CACHE_LOCK:
             _TRANSLATEGEMMA_GGUF_CACHE[model_key] = model
@@ -1079,6 +1091,17 @@ class TranslateGemmaTranslator(BaseTranslatorProvider):
             f"TranslateGemma GGUF model ready | repo={repo_id} | file={filename} | device={device_mode}"
         )
         return model
+
+    @staticmethod
+    def _append_full_mode_hint(message: str, quantization: str) -> str:
+        normalized = (quantization or "").strip().lower()
+        if normalized in {"full", "none"}:
+            return message
+        return (
+            f"{message} "
+            "This may be a llama_cpp compatibility issue in quantized mode. "
+            "Try TranslateGemma 'Full' mode."
+        )
 
     def _load_model(self, repo_id: str, hf_token: str) -> tuple[Any, Any]:
         global _TRANSLATEGEMMA_CACHED_MODEL

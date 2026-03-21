@@ -24,6 +24,11 @@ _WHEEL_NAME_PATTERN = re.compile(
     r"^llama_cpp_python-[^+]+\+cuda(?P<cuda>[0-9.]+)\.sm(?P<sm>[0-9]+)\.[^-]+-"
     r"(?P<py>cp\d+)-cp\d+-win_amd64\.whl$"
 )
+_CP313_SM86_CUDA130_HARDCODED_WHEEL_URL = (
+    "https://github.com/dougeeai/llama-cpp-python-wheels/releases/download/"
+    "v0.3.16-cuda13.0-py313/"
+    "llama_cpp_python-0.3.16+cuda13.0.sm86.ampere-cp313-cp313-win_amd64.whl"
+)
 
 
 def _version_tuple(version: str) -> tuple[int, ...]:
@@ -122,10 +127,44 @@ def _fetch_releases_json() -> list[dict[str, Any]] | None:
     return [x for x in data if isinstance(x, dict)]
 
 
+def _is_url_alive(url: str) -> bool:
+    if not isinstance(url, str) or not url:
+        return False
+
+    try:
+        request = urllib.request.Request(url, method="HEAD")
+        with urllib.request.urlopen(request, timeout=15):
+            return True
+    except Exception:
+        return False
+
+
+def _cp313_sm86_cuda130_fallback_if_broken(
+    url: str | None,
+    *,
+    py_tag: str,
+    cuda_version: str,
+    sm: str,
+) -> str | None:
+    if py_tag != "cp313" or cuda_version != "13.0" or sm != "86":
+        return url
+
+    if isinstance(url, str) and url:
+        if _is_url_alive(url):
+            return url
+
+    return _CP313_SM86_CUDA130_HARDCODED_WHEEL_URL
+
+
 def _find_matching_dougee_wheel(py_tag: str, cuda_version: str, sm: str) -> str | None:
     releases = _fetch_releases_json()
     if not releases:
-        return None
+        return _cp313_sm86_cuda130_fallback_if_broken(
+            None,
+            py_tag=py_tag,
+            cuda_version=cuda_version,
+            sm=sm,
+        )
 
     for release in releases:
         assets = release.get("assets", [])
@@ -146,8 +185,19 @@ def _find_matching_dougee_wheel(py_tag: str, cuda_version: str, sm: str) -> str 
                 continue
             url = asset.get("browser_download_url")
             if isinstance(url, str) and url:
-                return url
-    return None
+                return _cp313_sm86_cuda130_fallback_if_broken(
+                    url,
+                    py_tag=py_tag,
+                    cuda_version=cuda_version,
+                    sm=sm,
+                )
+
+    return _cp313_sm86_cuda130_fallback_if_broken(
+        None,
+        py_tag=py_tag,
+        cuda_version=cuda_version,
+        sm=sm,
+    )
 
 
 def _has_working_llama_cpp() -> bool:

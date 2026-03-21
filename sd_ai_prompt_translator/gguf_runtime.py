@@ -31,8 +31,12 @@ _WHEEL_NAME_PATTERN = re.compile(
     r"(?P<py>cp\d+)-cp\d+-win_amd64\.whl$"
 )
 
+_REGISTERED_DLL_PATHS: set[str] = set()
+_DLL_DIR_HANDLES: list[Any] = []
+
 
 def ensure_llama_cpp_available() -> tuple[bool, str]:
+    _prepare_torch_runtime_for_llama_import()
     try:
         import llama_cpp  # type: ignore # noqa: F401
 
@@ -58,6 +62,7 @@ def ensure_llama_cpp_available() -> tuple[bool, str]:
             )
 
         try:
+            _prepare_torch_runtime_for_llama_import()
             import llama_cpp  # type: ignore # noqa: F401
 
             return True, "llama_cpp auto-installed successfully from Python 3.12 community wheel."
@@ -93,6 +98,7 @@ def ensure_llama_cpp_available() -> tuple[bool, str]:
         )
 
     try:
+        _prepare_torch_runtime_for_llama_import()
         import llama_cpp  # type: ignore # noqa: F401
 
         return True, "llama_cpp auto-installed successfully from dougeeai wheel."
@@ -233,6 +239,45 @@ def _download_file(url: str, destination: Path) -> None:
     finally:
         if temp_path.exists():
             temp_path.unlink(missing_ok=True)
+
+
+def _prepare_torch_runtime_for_llama_import() -> None:
+    try:
+        import torch  # type: ignore
+    except Exception:
+        return
+
+    if os.name != "nt":
+        return
+
+    try:
+        torch_lib = Path(torch.__file__).resolve().parent / "lib"
+    except Exception:
+        return
+
+    if not torch_lib.exists():
+        return
+
+    torch_lib_str = str(torch_lib)
+    if torch_lib_str in _REGISTERED_DLL_PATHS:
+        return
+
+    add_dll_directory = getattr(os, "add_dll_directory", None)
+    if callable(add_dll_directory):
+        try:
+            handle = add_dll_directory(torch_lib_str)
+            _DLL_DIR_HANDLES.append(handle)
+            _REGISTERED_DLL_PATHS.add(torch_lib_str)
+            return
+        except Exception:
+            # Fallback to PATH mutation below.
+            pass
+
+    current_path = os.environ.get("PATH", "")
+    lowered_entries = [entry.lower() for entry in current_path.split(";") if entry]
+    if torch_lib_str.lower() not in lowered_entries:
+        os.environ["PATH"] = f"{torch_lib_str};{current_path}" if current_path else torch_lib_str
+    _REGISTERED_DLL_PATHS.add(torch_lib_str)
 
 
 def _pip_install(wheel_url: str) -> tuple[int, str]:

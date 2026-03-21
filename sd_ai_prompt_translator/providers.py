@@ -235,24 +235,38 @@ def validate_line_integrity(source_line: str, translated_line: str) -> bool:
     if _count_structural_colons(source_line) != _count_structural_colons(translated_line):
         return False
 
-    if _extract_digit_tokens(source_line) != _extract_digit_tokens(translated_line):
+    # Digits are also validated context-aware:
+    # - strict in structural prompt regions and tag-like prompt tokens
+    # - relaxed in natural-language text (e.g., "1명" -> "a")
+    if _extract_protected_digit_tokens(source_line) != _extract_protected_digit_tokens(translated_line):
         return False
 
     return True
 
 
-def _extract_digit_tokens(text: str) -> list[str]:
+def _extract_protected_digit_tokens(text: str) -> list[str]:
     tokens: list[str] = []
-    current = []
-    for ch in text:
-        if ch.isdigit():
-            current.append(ch)
-        elif current:
-            tokens.append("".join(current))
-            current = []
+    spans = _collect_balanced_spans(text)
+    has_non_english = _contains_non_english_letters(text)
 
-    if current:
-        tokens.append("".join(current))
+    for match in re.finditer(r"\d+", text):
+        start, end = match.start(), match.end()
+        if _range_inside_any_span(start, end, spans):
+            tokens.append(match.group(0))
+            continue
+
+        token = _extract_context_token(text, start, end)
+        if _token_has_non_english_letters(token):
+            # Natural-language token like "1명" / "第1話" etc.: relax.
+            continue
+
+        if _is_prompt_like_token(token):
+            tokens.append(match.group(0))
+            continue
+
+        # Pure number in ASCII prompt line: keep strict.
+        if not has_non_english:
+            tokens.append(match.group(0))
 
     return tokens
 
@@ -293,6 +307,40 @@ def _collect_balanced_spans(text: str) -> list[tuple[int, int]]:
         spans.append((start_idx, idx + 1))
 
     return spans
+
+
+def _range_inside_any_span(start: int, end: int, spans: list[tuple[int, int]]) -> bool:
+    for span_start, span_end in spans:
+        if start >= span_start and end <= span_end:
+            return True
+    return False
+
+
+def _extract_context_token(text: str, start: int, end: int) -> str:
+    left = start
+    while left > 0 and not text[left - 1].isspace() and text[left - 1] != ",":
+        left -= 1
+
+    right = end
+    while right < len(text) and not text[right].isspace() and text[right] != ",":
+        right += 1
+
+    return text[left:right]
+
+
+def _token_has_non_english_letters(token: str) -> bool:
+    for ch in token:
+        if ch.isalpha() and not ch.isascii():
+            return True
+    return False
+
+
+def _is_prompt_like_token(token: str) -> bool:
+    if any("a" <= ch.lower() <= "z" for ch in token):
+        return True
+    if any(ch in "_|:/<>[]{}().-+" for ch in token):
+        return True
+    return False
 
 
 def _parse_first_json_object(raw_text: str) -> Any:

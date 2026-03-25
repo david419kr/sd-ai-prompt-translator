@@ -235,12 +235,6 @@ def validate_line_integrity(source_line: str, translated_line: str) -> bool:
     if _count_structural_colons(source_line) != _count_structural_colons(translated_line):
         return False
 
-    # Digits are also validated context-aware:
-    # - strict in structural prompt regions and tag-like prompt tokens
-    # - relaxed in natural-language text (e.g., "1명" -> "a")
-    if _extract_protected_digit_tokens(source_line) != _extract_protected_digit_tokens(translated_line):
-        return False
-
     return True
 
 
